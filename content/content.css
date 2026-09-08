@@ -1,0 +1,157 @@
+/* 双语译文样式 */
+font.pure-translate-target {
+  display: block;
+  margin: 0.3em 0;
+  line-height: inherit;
+  font-size: inherit;
+  color: inherit;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+font.pure-translate-target--inline {
+  display: inline;
+  margin: 0 0.15em;
+}
+
+/* 预设主题（预设值参考沉浸式翻译 / kiss-translator / ReadFrog 的样式库） */
+
+/* 弱化（默认）：透明度 + 颜色淡化，零布局影响 */
+font.pure-translate-target.pt-style-soft {
+  opacity: 0.72;
+  color: color-mix(in srgb, currentColor 78%, transparent);
+}
+
+font.pure-translate-target.pt-style-soft:hover {
+  opacity: 1;
+  color: inherit;
+}
+
+/* 虚线下划线 */
+font.pure-translate-target.pt-style-dashed {
+  text-decoration: underline dashed color-mix(in srgb, currentColor 55%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.25em;
+  opacity: 0.85;
+}
+
+/* 引用块（左边框 + 浅背景，仅块级） */
+font.pure-translate-target.pt-style-quote {
+  border-left: 3px solid color-mix(in srgb, currentColor 60%, transparent);
+  padding-left: 0.6em;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  border-radius: 2px;
+}
+
+/* 引用块主题应用到行内译文时退化为弱化 */
+font.pure-translate-target--inline.pt-style-quote {
+  border-left: none;
+  padding-left: 0;
+  background: none;
+  opacity: 0.72;
+}
+
+/* 马克笔高亮 */
+font.pure-translate-target.pt-style-marker {
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, currentColor 8%, transparent),
+    color-mix(in srgb, currentColor 20%, transparent) 12%,
+    color-mix(in srgb, currentColor 20%, transparent) 88%,
+    color-mix(in srgb, currentColor 8%, transparent)
+  );
+  border-radius: 3px;
+  padding: 0 0.2em;
+}
+
+/* 与原文一致（无区分） */
+font.pure-translate-target.pt-style-plain {
+  /* 跟随页面默认样式 */
+}
+
+span.pure-translate-wrap {
+  display: inline;
+}
+
+/* 翻译进度角标 */
+.pure-translate-badge {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(28, 32, 38, 0.92);
+  color: #f0f3f7;
+  font: 12px/1.4 -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  max-width: 60vw;
+}
+
+.pure-translate-badge.ptb-error {
+  background: rgba(122, 38, 24, 0.94);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.pure-translate-badge.ptb-done {
+  background: rgba(22, 68, 43, 0.94);
+}
+
+.pure-translate-badge .ptb-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pure-translate-badge .ptb-spin {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: ptb-rotate 0.8s linear infinite;
+}
+
+.pure-translate-badge .ptb-spin.ptb-hidden {
+  display: none;
+}
+
+@keyframes ptb-rotate {
+  to { transform: rotate(360deg); }
+}
+
+/* 划词翻译浮层 */
+.pure-translate-float {
+  position: fixed;
+  z-index: 2147483647;
+  max-width: 360px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1f2328;
+  font: 13px/1.6 -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  cursor: default;
+  white-space: pre-wrap;
+}
+
+.pure-translate-float-src {
+  color: #6b7280;
+  border-left: 2px solid #d1d5db;
+  padding-left: 8px;
+  margin-bottom: 8px;
+  max-height: 72px;
+  overflow: hidden;
+}
+
+.pure-translate-float-res {
+  font-size: 14px;
+}

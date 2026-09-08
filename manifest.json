@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "纯译 PureTranslate",
+  "version": "1.0.0",
+  "description": "极简 AI 网页翻译：双语对照 / 单语模式、智能上下文、按站点类型切换翻译角色、专有名词与界面元素智能跳过。BYOK 直连 OpenCode Go。",
+  "permissions": ["storage", "contextMenus"],
+  "host_permissions": [
+    "https://opencode.ai/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/content.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "纯译 PureTranslate",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options/options.html",
+  "commands": {
+    "toggle-translate": {
+      "suggested_key": { "default": "Alt+T" },
+      "description": "翻译 / 还原当前页面"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
