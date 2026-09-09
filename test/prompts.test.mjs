@@ -66,6 +66,16 @@ test('detectRole：域名路由', () => {
   assert.equal(detectRole('not a url'), 'general');
 });
 
+test('detectRole：.edu 与二级教育域命中学术（Code Review P3）', () => {
+  assert.equal(detectRole('https://mit.edu/'), 'academic');
+  assert.equal(detectRole('https://www.stanford.edu/paper'), 'academic');
+  assert.equal(detectRole('https://example.edu.cn/'), 'academic');
+  assert.equal(detectRole('https://www.cam.ac.uk/'), 'academic');
+  // 负例：含 "edu" 字样的非教育域名不受影响
+  assert.equal(detectRole('https://acme.edu.com/'), 'general');
+  assert.equal(detectRole('https://education.example.com/'), 'general');
+});
+
 test('buildSystemPrompt：包含角色与语言', () => {
   const p = buildSystemPrompt('technical', 'zh-CN', '术语 foo 保留');
   assert.ok(p.includes('技术文档'));

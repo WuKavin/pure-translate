@@ -36,6 +36,12 @@
     }
   },
   "options_page": "options/options.html",
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/*.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "commands": {
     "toggle-translate": {
       "suggested_key": { "default": "Alt+T" },

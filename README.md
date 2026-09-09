@@ -54,13 +54,17 @@
 | `glm-5.3-flash` | 1,580 | 质量略高 |
 | `mimo-v2.5` | 30,100 | 大批量翻译 |
 
-### 请求头合规说明
+### ⚠️ OpenCode Go 使用风险（重要）
 
-OpenCode Go 官方要求第三方工具：不产生滥用流量、正确自我标识、携带 `x-opencode-session` 请求头（2026-09-06 起强制，用于 prompt caching 优化）。本扩展已实现（见 `background/service-worker.js` 的 `apiHeaders()`）：
+OpenCode Go 官方（2026-09-09 更新，见 [dev.opencode.ai/docs/go](https://dev.opencode.ai/docs/go/)）要求第三方客户端：
 
-- `Authorization: Bearer <key>` — 认证
-- `x-opencode-session: <uuid>` — 每个页面翻译会话生成一个稳定 UUID
-- `x-opencode-client: pure-translate/1.0` — 工具自我标识
+1. 产生**典型 coding-agent 流量**（该服务面向 OpenCode 及同类编程代理设计）
+2. 用**自身 User-Agent** 标识自己（而非 SDK / HTTP 库名）
+3. 每个会话发送稳定的 `x-opencode-session` 请求头
+
+本扩展是网页翻译工具：请求头方面已尽力配合（发送 `x-opencode-client` 与每个页面会话稳定的 `x-opencode-session`，见 `background/service-worker.js` 的 `apiHeaders()`），但浏览器扩展的 `fetch` **无法自定义 User-Agent**，且翻译流量不属于官方定义的 coding-agent 流量，本扩展**不在官方「Validated Clients」列表内**。
+
+**因此不构成官方意义上的合规使用**，存在被限流或账号被标记的风险，是否使用 OpenCode Go 翻译由你自行评估。如需零风险方案，建议使用「本地 LM Studio」或明确允许通用翻译用途的 OpenAI 兼容服务。
 
 API 直连 `https://opencode.ai/zen/go/v1/chat/completions`，Key 仅存于浏览器本地 `chrome.storage.local`，不经过任何第三方服务器。
 
@@ -100,7 +104,9 @@ pure-translate/
 │   └── content.css
 ├── lib/
 │   ├── prompts.js           # 站点角色提示词、批次协议、输出解析器、缓存 key
-│   └── provider.js          # 供应商抽象（OpenCode Go / LM Studio / 自定义）
+│   ├── provider.js          # 供应商抽象（OpenCode Go / LM Studio / 自定义）
+│   ├── lang.js              # 文字统计、简繁/假名/西里尔判断、无效文本过滤
+│   └── dom-ops.js           # 占位符构建、双语/单语渲染、包装记录与还原
 ├── popup/                   # 快速控制面板
 ├── options/                 # 设置页
 ├── icons/                   # 扩展图标
@@ -110,8 +116,8 @@ pure-translate/
 ## 验证
 
 ```bash
-node --test test/prompts.test.mjs   # 13 项单测全部通过
-node --check content/content.js     # 语法检查通过
+npm test                            # 39 项单测（lang / dom-ops / prompts / provider）
+node --check content/content.js
 ```
 
 ## 更新插件（开发迭代）
@@ -128,5 +134,5 @@ node --check content/content.js     # 语法检查通过
 
 - 翻译 PDF / YouTube 字幕 / 输入框不在范围内（刻意裁剪）
 - 复杂 Web 应用（如在线编辑器）可能有个别段落误翻，可用 CSS 选择器排除
-- 模型输出的占位符若与原文结构不匹配，该段自动降级为双语或保留原文，不会破坏页面
+- 模型输出的占位符若与原文结构不匹配，单语模式整段替换为纯文本译文（不出现双语混杂）；双语模式保留原文结构并插入译文
 - 插入译文会使下方内容下移（未做视口位置补偿）

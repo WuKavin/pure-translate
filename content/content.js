@@ -1,16 +1,24 @@
 // Content Script：段落提取、智能跳过、双语/单语渲染、动态内容观察
-(() => {
+(async () => {
   'use strict';
 
+  // ---------- 共享模块动态加载（lib/lang.js、lib/dom-ops.js，可被 node 测试） ----------
+  let langLib = null;
+  let domOps = null;
+  const libReady = (async () => {
+    [langLib, domOps] = await Promise.all([
+      import(chrome.runtime.getURL('lib/lang.js')),
+      import(chrome.runtime.getURL('lib/dom-ops.js')),
+    ]);
+  })().catch((err) => {
+    console.warn('[PureTranslate] 模块加载失败:', err);
+  });
+
   const TARGET_CLASS = 'pure-translate-target';
-  const PH_OPEN = '⟪';
-  const PH_CLOSE = '⟫';
-  const MAX_SEG_CHARS = 4000;
 
   const BLOCK_TAGS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'DD', 'DT', 'FIGCAPTION', 'TD', 'TH', 'CAPTION', 'SUMMARY']);
   const BLOCK_LIKE = new Set([...BLOCK_TAGS, 'DIV', 'SECTION', 'ARTICLE', 'MAIN', 'ASIDE', 'HEADER', 'FOOTER', 'NAV', 'UL', 'OL', 'TABLE', 'TR', 'FORM', 'FIELDSET', 'DETAILS', 'DL', 'FIGURE', 'ADDRESS', 'CENTER']);
   const NESTED_BLOCK_SELECTOR = [...BLOCK_LIKE].join(',');
-  const INLINE_TAGS = new Set(['A', 'ABBR', 'B', 'BDI', 'BDO', 'BIG', 'CITE', 'DFN', 'EM', 'FONT', 'I', 'IMG', 'INS', 'MARK', 'Q', 'S', 'SMALL', 'SPAN', 'STRONG', 'SUB', 'SUP', 'TIME', 'U', 'WBR']);
   const EXCLUDE_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'CANVAS', 'SVG', 'MATH', 'CODE', 'PRE', 'KBD', 'SAMP', 'VAR', 'TEXTAREA', 'INPUT', 'SELECT', 'OPTION', 'BUTTON', 'VIDEO', 'AUDIO', 'PICTURE', 'SOURCE', 'TEMPLATE', 'OBJECT', 'EMBED', 'DIALOG', 'XMP', 'PLAINTEXT', 'LABEL', 'LEGEND']);
 
   // ---------- 状态 ----------
@@ -30,7 +38,9 @@
   const sessionUuid = crypto.randomUUID();
 
   const origHtml = new WeakMap(); // 单语还原用
+  const origValues = new WeakMap();
   const pageMemo = new Map(); // 本页内存缓存 phText -> 译文
+  let wrapRecords = []; // 直接文本包装记录（还原时无损展开）
   let excludeSelector = '';
 
   function rebuildExcludeSelector() {
@@ -76,43 +86,14 @@
     return false;
   }
 
-  // ---------- 文字统计与有效性 ----------
-  function textStats(text) {
-    let cjk = 0, latin = 0, kana = 0, hangul = 0, valid = 0;
-    for (const ch of text) {
-      const c = ch.codePointAt(0);
-      if ((c >= 0x4e00 && c <= 0x9fff) || (c >= 0x3400 && c <= 0x4dbf)) { cjk++; valid++; }
-      else if (c >= 0x3040 && c <= 0x30ff) { kana++; valid++; }
-      else if (c >= 0xac00 && c <= 0xd7af) { hangul++; valid++; }
-      else if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || (c >= 0xc0 && c <= 0x24f)) { latin++; valid++; }
-    }
-    return { cjk, latin, kana, hangul, valid, total: [...text].length };
-  }
-
-  function targetRatio(stats, lang) {
-    const v = Math.max(stats.valid, 1);
-    if (lang.startsWith('zh')) return stats.cjk / v;
-    if (lang === 'ja') return (stats.kana + stats.cjk) / v;
-    if (lang === 'ko') return stats.hangul / v;
-    return stats.latin / v;
-  }
-
   function segmentText(el) {
     return (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
-  // 智能跳过：按钮/链接短文本、导航项、纯符号、标识符、已是目标语言
+  // 智能跳过：文本有效性/语言判断（lib/lang.js）+ UI 启发式（DOM 上下文）
   function isSkippable(el, text, lang) {
-    if (text.length < 3) return true;
-    if (text.length > MAX_SEG_CHARS) return true;
-    const stats = textStats(text);
-    if (stats.valid < 3) return true; // 纯数字/符号
-    if (stats.valid / Math.max(stats.total, 1) < 0.3) return true; // 符号占比过高
-    if (targetRatio(stats, lang) >= 0.6) return true; // 已是目标语言
-    if (/^(https?:\/\/\S+|[\w.+-]+@[\w-]+\.[\w.]+)$/.test(text)) return true; // URL / 邮箱
-    if (!/\s/.test(text) && /[_.-]/.test(text) && /^[A-Za-z0-9_./:\-~@+#]+$/.test(text) && /[a-z][A-Z]|[_.-]/.test(text)) return true; // 标识符
-    if (/^v?\d+(\.\d+)+/.test(text) && text.length < 20) return true; // 版本号
-
+    if (langLib.invalidText(text)) return true;
+    if (langLib.alreadyTargetLang(text, lang)) return true;
     // UI 启发式：不强行翻译按钮、短链接、导航项
     if (el.closest('nav,header,footer,aside,[role="navigation"],[role="menubar"],[role="menu"]') && text.length <= 30) return true;
     if (el.closest('a,[role="button"]') && text.length <= 20) return true;
@@ -134,51 +115,6 @@
     });
   }
 
-  // ---------- 占位符构建 ----------
-  function buildPlaceholder(el, regs) {
-    let out = '';
-    const walk = (container) => {
-      for (const node of Array.from(container.childNodes)) {
-        if (node.nodeType === Node.TEXT_NODE) {
-          const v = node.nodeValue;
-          if (!v.trim()) { out += ' '; continue; }
-          regs.push({ type: 'text', node });
-          out += PH_OPEN + (regs.length - 1) + PH_CLOSE + v;
-        } else if (node.nodeType === Node.ELEMENT_NODE) {
-          if (node.tagName === 'BR') { out += '\n'; continue; }
-          if (excludedQuick(node)) continue;
-          const t = node.textContent || '';
-          if (!t.trim()) continue;
-          if (node.tagName === 'IMG' || node.querySelector('img')) {
-            // 含图片的内联元素整体保留（图片不翻译）
-            regs.push({ type: 'node', node });
-            out += PH_OPEN + (regs.length - 1) + PH_CLOSE;
-          } else {
-            // 链接/强调等内联元素：深入收集其文本节点，保证链接文字也被翻译
-            // （此前 ≤40 字符的链接整体保留，导致 GitHub 文件列表/标题/链接列表整段漏翻）
-            walk(node);
-          }
-        }
-      }
-    };
-    walk(el);
-    return out.replace(/[ \t]+/g, ' ').trim();
-  }
-
-  function splitByPh(str) {
-    const parts = [];
-    const re = /⟪(\d{1,3})⟫/g;
-    let last = 0;
-    let m;
-    while ((m = re.exec(str)) !== null) {
-      if (m.index > last) parts.push({ kind: 'text', str: str.slice(last, m.index) });
-      parts.push({ kind: 'ph', i: parseInt(m[1], 10) });
-      last = re.lastIndex;
-    }
-    if (last < str.length) parts.push({ kind: 'text', str: str.slice(last) });
-    return parts;
-  }
-
   // ---------- 收集段落（单次下降，无全页扫描） ----------
   function collectSegments(root, lang) {
     const segments = [];
@@ -192,7 +128,7 @@
       const text = segmentText(el);
       if (isSkippable(el, text, lang)) return;
       const regs = [];
-      const phText = buildPlaceholder(el, regs);
+      const phText = domOps.buildPlaceholder(el, regs, excludedQuick);
       if (!phText || !phText.trim()) return;
       if (regs.every((r) => r.type === 'node')) return;
       const isInline = /^inline$/.test(displayOf(el).display);
@@ -200,22 +136,8 @@
     };
 
     const wrapDirectText = (el) => {
-      let wrapper = null;
-      for (const node of Array.from(el.childNodes)) {
-        const isText = node.nodeType === Node.TEXT_NODE && node.nodeValue.trim();
-        const isInlineEl = node.nodeType === Node.ELEMENT_NODE && INLINE_TAGS.has(node.tagName) && !excludedQuick(node) && (node.textContent || '').trim() && node.tagName !== 'BR';
-        if (isText || isInlineEl) {
-          if (!wrapper) {
-            wrapper = document.createElement('span');
-            wrapper.className = 'pure-translate-wrap';
-            node.parentNode.insertBefore(wrapper, node);
-          }
-          wrapper.appendChild(node);
-        } else {
-          wrapper = null;
-        }
-      }
-      if (wrapper) addSegment(wrapper);
+      const records = domOps.wrapDirectText(el, { excluded: excludedQuick, addSegment });
+      if (records.length) wrapRecords.push(...records);
     };
 
     const processBlock = (el) => {
@@ -297,7 +219,6 @@
     }
   }
 
-  // ---------- 渲染 ----------
   // ---------- 渲染队列（借鉴 ReadFrog batchDOMOperation：rAF 合帧，所有译文 DOM 写每帧最多一批） ----------
   const renderQueue = [];
   let renderRaf = 0;
@@ -320,59 +241,15 @@
   }
 
   function renderBilingual(seg, translation) {
-    const el = seg.el;
-    const font = document.createElement('font');
     const style = 'pt-style-' + (settings?.bilingualStyle || 'soft');
-    font.className = TARGET_CLASS + (seg.isInline ? ' ' + TARGET_CLASS + '--inline' : '') + ' ' + style;
-    const parts = splitByPh(translation);
-    for (const part of parts) {
-      if (part.kind === 'text') {
-        if (part.str.trim()) font.appendChild(document.createTextNode(part.str));
-      } else {
-        const reg = seg.regs[part.i];
-        if (reg && reg.type === 'node') {
-          font.appendChild(reg.node.cloneNode(true));
-        }
-      }
-    }
-    markMutation();
-    el.setAttribute('data-pt-src', '1');
-    el.insertAdjacentElement('afterend', font);
-    return true;
+    return domOps.renderBilingual(seg, translation, {
+      targetClass: TARGET_CLASS + ' ' + style,
+      markMutation,
+    });
   }
 
   function renderMono(seg, translation) {
-    const el = seg.el;
-    const parts = splitByPh(translation);
-    const textRegIdx = seg.regs.map((r, i) => (r.type === 'text' ? i : -1)).filter((i) => i >= 0);
-    const phTextIdx = parts.filter((p) => p.kind === 'ph' && seg.regs[p.i]?.type === 'text').map((p) => p.i);
-    if (textRegIdx.length === phTextIdx.length && textRegIdx.every((v, k) => v === phTextIdx[k])) {
-      // 精确路径：占位符与原文结构对齐，逐文本节点替换，保留链接/加粗等内联结构
-      markMutation();
-      origHtml.set(el, el.innerHTML);
-      let current = -1;
-      for (const part of parts) {
-        if (part.kind === 'ph') {
-          const reg = seg.regs[part.i];
-          current = reg.type === 'text' ? part.i : -1;
-        } else if (part.kind === 'text' && current >= 0) {
-          const reg = seg.regs[current];
-          if (!origValues.has(reg.node)) origValues.set(reg.node, reg.node.nodeValue);
-          if (part.str) reg.node.nodeValue = part.str;
-          current = -1;
-        }
-      }
-      el.setAttribute('data-pt-mono', '1');
-      return true;
-    }
-    // 兜底路径：占位符对不齐时整段替换为纯文本译文（绝不显示双语混杂）
-    const plain = translation.replace(/⟪\d{1,3}⟫/g, ' ').replace(/\s+/g, ' ').trim();
-    if (!plain) return false;
-    markMutation();
-    origHtml.set(el, el.innerHTML);
-    el.replaceChildren(document.createTextNode(plain));
-    el.setAttribute('data-pt-mono', '1');
-    return true;
+    return domOps.renderMono(seg, translation, { markMutation, origHtml, origValues });
   }
 
   // ---------- 翻译调度 ----------
@@ -472,8 +349,6 @@
     refreshBadge();
   }
 
-  const origValues = new WeakMap();
-
   function applyTranslation(seg, translation, lang) {
     void lang;
     if (!active || seg.done) return;
@@ -489,14 +364,29 @@
     });
   }
 
+  // ---------- 设置加载（只读明确设置键，避免读到全部缓存；onChanged 过滤缓存变化） ----------
+  const SETTING_KEYS = [
+    'provider', 'providers', 'models',
+    'targetLang', 'mode', 'roleOverride', 'extraInstruction',
+    'batchSize', 'concurrency', 'urlBlacklist', 'cssExclude',
+    'reasoning', 'bilingualStyle', 'bilingualCss',
+  ];
+  const SETTING_DEFAULTS = {
+    provider: 'opencode',
+    providers: {
+      opencode: { baseUrl: 'https://opencode.ai/zen/go/v1', apiKey: '' },
+      lmstudio: { baseUrl: 'http://localhost:1234/v1', apiKey: '' },
+      custom: { baseUrl: '', apiKey: '' },
+    },
+    models: { opencode: 'deepseek-v4-flash', lmstudio: '', custom: '' },
+    targetLang: 'zh-CN', mode: 'bilingual', roleOverride: 'auto', extraInstruction: '',
+    batchSize: 12, concurrency: 2, urlBlacklist: [], cssExclude: '', reasoning: 'off',
+    bilingualStyle: 'soft', bilingualCss: '',
+  };
+
   async function loadSettings() {
-    const stored = await chrome.storage.local.get(null);
-    return {
-      apiKey: '', baseUrl: 'https://opencode.ai/zen/go/v1', model: 'deepseek-v4-flash',
-      targetLang: 'zh-CN', mode: 'bilingual', roleOverride: 'auto', extraInstruction: '',
-      batchSize: 12, concurrency: 2, urlBlacklist: [], cssExclude: '', reasoning: 'off',
-      bilingualStyle: 'soft', bilingualCss: '', ...stored,
-    };
+    const stored = await chrome.storage.local.get(SETTING_KEYS);
+    return { ...SETTING_DEFAULTS, ...stored };
   }
 
   // ---------- 译文自定义样式注入 ----------
@@ -580,6 +470,11 @@
 
   async function startTranslate() {
     if (translating || active) return;
+    await libReady;
+    if (!langLib || !domOps) {
+      setBadge('扩展模块加载失败，请刷新页面重试', 'error');
+      return;
+    }
     settings = await loadSettings();
     rebuildExcludeSelector();
     blacklisted = isBlacklisted();
@@ -587,8 +482,10 @@
       setBadge('当前页面在排除列表中', 'error');
       return;
     }
-    if (!settings.apiKey) {
-      setBadge('未配置 API Key，请打开扩展设置', 'error');
+    // 按当前供应商解析：LM Studio 无需 Key，其余供应商检查对应配置
+    const provider = settings.provider || 'opencode';
+    if (provider !== 'lmstudio' && !settings.providers?.[provider]?.apiKey) {
+      setBadge('当前供应商未配置 API Key，请打开扩展设置', 'error');
       return;
     }
 
@@ -631,6 +528,9 @@
       if (html != null) el.innerHTML = html;
       el.removeAttribute('data-pt-mono');
     });
+    // 无损展开包装：还原被移动进 span.pure-translate-wrap 的原节点（Code Review P2-2）
+    domOps?.unwrapRecords(wrapRecords);
+    wrapRecords = [];
     hideBadge();
     if (io) { io.disconnect(); io = null; }
     if (observer) { observer.disconnect(); observer = null; }
@@ -648,6 +548,23 @@
   function startObserver() {
     if (observer) return;
     let pendingRoots = [];
+    // 分批 drain：翻译中不丢弃新增节点；每轮处理 50 个，剩余循环排期（Code Review P2-1）
+    const drain = () => {
+      if (!active) return;
+      const batch = pendingRoots.splice(0, 50);
+      if (!batch.length) return;
+      const lang = settings?.targetLang || 'zh-CN';
+      const segs = [];
+      for (const r of batch) {
+        if (!r.isConnected) continue;
+        segs.push(...collectSegments(r, lang));
+      }
+      if (segs.length) registerSegments(segs);
+      if (pendingRoots.length) {
+        clearTimeout(observerTimer);
+        observerTimer = setTimeout(drain, 100);
+      }
+    };
     observer = new MutationObserver((muts) => {
       if (Date.now() < internalMutationUntil) return;
       for (const m of muts) {
@@ -658,19 +575,7 @@
         }
       }
       clearTimeout(observerTimer);
-      observerTimer = setTimeout(async () => {
-        const roots = pendingRoots;
-        pendingRoots = [];
-        if (!active || translating || !roots.length) return;
-        const lang = settings?.targetLang || 'zh-CN';
-        const segs = [];
-        for (const r of roots.slice(0, 50)) {
-          if (!r.isConnected) continue;
-          segs.push(...collectSegments(r, lang));
-        }
-        if (!segs.length) return;
-        registerSegments(segs); // 视口内优先，滚动自动续译
-      }, 600);
+      observerTimer = setTimeout(drain, 600);
     });
     observer.observe(document.body, { childList: true, subtree: true });
   }
@@ -728,13 +633,13 @@
     if (floatEl && !floatEl.contains(e.target)) closeFloat();
   }, true);
 
-  // ---------- 语言检测（缓存，避免 popup 轮询触发 reflow） ----------
+  // ---------- 页面语言提示（缓存，避免 popup 轮询触发 reflow） ----------
   function computePageLang(lang) {
     try {
       const sample = (document.body?.innerText || '').slice(0, 4000);
-      const stats = textStats(sample);
+      const stats = langLib.textStats(sample);
       if (stats.valid < 40) return 'unknown';
-      return targetRatio(stats, lang) >= 0.5 ? 'target' : 'foreign';
+      return langLib.targetRatio(stats, lang) >= 0.5 ? 'target' : 'foreign';
     } catch {
       return 'unknown';
     }
@@ -784,9 +689,13 @@
     return false;
   });
 
-  // 初始化：预读设置
+  // 初始化：预读设置（只读明确键）
   loadSettings().then((s) => { settings = s; rebuildExcludeSelector(); applyStyleUpdate(); });
-  chrome.storage.onChanged.addListener(() => {
+  // 设置变化才重载；缓存 key（pt-cache*）变化直接忽略，避免多标签全量读取（Code Review P2-3）
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    const relevant = Object.keys(changes).some((k) => !k.startsWith('pt-cache'));
+    if (!relevant) return;
     loadSettings().then((s) => { settings = s; rebuildExcludeSelector(); applyStyleUpdate(); });
   });
 })();
